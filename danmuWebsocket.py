@@ -4,8 +4,19 @@ from util import *
 import _thread
 import zlib
 import time
+import threading
+
+class runForeverThread(threading.Thread):
+    def __init__(self, threadId, wss: websocket.WebSocketApp):
+        threading.Thread.__init__(self)
+        self.threadId = threadId
+        self.wss = wss
+
+    def run(self) -> None:
+        self.wss.run_forever()
 
 class danmuWebsocket:
+
     def __init__(self):
         self.room = roomInfo('0')
         self.wss = None
@@ -25,14 +36,14 @@ class danmuWebsocket:
         try:
             message = zlib.decompress(message)
         except Exception as e:
-            print(message)
+            pass
         else:
             t = convertSourceDanmuToList(message)
             for l in t:
                 if l['cmd'] == 'SEND_GIFT':
                     timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['data']['timestamp']))
                     print(timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num']))
-                elif l['cmd'] == 'DANMU_MSG':
+                if l['cmd'] == 'DANMU_MSG':
                     timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['info'][9]['ts']))
                     print(timestr + l['info'][2][1] + ':' + l['info'][1])
 
@@ -46,7 +57,7 @@ class danmuWebsocket:
         print("opening...")
         self.wss.send(generateAuthPack(self.room))
 
-    def heartBeat(self, wss):
+    def heartBeat(self):
         payload = 'hello'
         payload_byte = bytearray(payload, 'ascii')
 
@@ -60,7 +71,7 @@ class danmuWebsocket:
         final = length_byte + header_length_byte + datapack_protocol_ver_byte + kind_of_datapack_byte + const_one_byte + payload_byte
         while 1:
             try:
-                wss.send(final)
+                self.wss.send(final)
             except Exception as e:
                 print('connecting...')
                 time.sleep(5)
@@ -68,12 +79,19 @@ class danmuWebsocket:
                 print('heart')
                 time.sleep(20)
 
+    def run(self):
+        self.wss.run_forever()
+
     def startWss(self):
         self.wss = websocket.WebSocketApp('wss://broadcastlv.chat.bilibili.com/sub',
                                      on_message=self.on_message,
                                      on_error=self.on_error,
                                      on_open=self.on_open)
-        _thread.start_new_thread(self.heartBeat, (self.wss,))
-        self.wss.run_forever()
+        thread1 = runForeverThread(1, self.wss)
+        thread1.start()
+        _thread.start_new_thread(self.heartBeat, ())
+
+
+
 
 

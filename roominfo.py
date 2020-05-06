@@ -1,6 +1,6 @@
 import json
 import requests
-import websocket
+
 
 class roomInfo:
     def __init__(self):
