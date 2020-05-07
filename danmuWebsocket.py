@@ -5,59 +5,27 @@ import _thread
 import zlib
 import time
 import threading
+import ctypes
+import inspect
+from PyQt5.QtWidgets import (QListWidget, QApplication, QListWidgetItem)
+from PyQt5.QtGui import QIcon
 
 class runForeverThread(threading.Thread):
-    def __init__(self, threadId, wss: websocket.WebSocketApp):
+    def __init__(self, wss: websocket.WebSocketApp):
         threading.Thread.__init__(self)
-        self.threadId = threadId
         self.wss = wss
+        self.runThread = None
+        self.heartBeat = None
 
     def run(self) -> None:
         self.wss.run_forever()
 
-class danmuWebsocket:
+class heartBeatThread(threading.Thread):
+    def __init__(self, wss: websocket.WebSocketApp):
+        threading.Thread.__init__(self)
+        self.wss = wss
 
-    def __init__(self):
-        self.room = roomInfo('0')
-        self.wss = None
-
-    def __init__(self, roomId: str):
-        self.room = roomInfo(roomId)
-        self.wss = None
-
-    def getRoomId(self):
-        return self.room.getRoomId()
-
-    def getToken(self):
-        return self.room.get_token()
-
-    def handleMsg(self, message):
-        message = message[16:]
-        try:
-            message = zlib.decompress(message)
-        except Exception as e:
-            pass
-        else:
-            t = convertSourceDanmuToList(message)
-            for l in t:
-                if l['cmd'] == 'SEND_GIFT':
-                    timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['data']['timestamp']))
-                    print(timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num']))
-                if l['cmd'] == 'DANMU_MSG':
-                    timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['info'][9]['ts']))
-                    print(timestr + l['info'][2][1] + ':' + l['info'][1])
-
-    def on_error(self, error):
-        print(error)
-
-    def on_message(self, message):
-        _thread.start_new_thread(self.handleMsg, (message,))
-
-    def on_open(self):
-        print("opening...")
-        self.wss.send(generateAuthPack(self.room))
-
-    def heartBeat(self):
+    def run(self) -> None:
         payload = 'hello'
         payload_byte = bytearray(payload, 'ascii')
 
@@ -79,19 +47,101 @@ class danmuWebsocket:
                 print('heart')
                 time.sleep(20)
 
-    def run(self):
-        self.wss.run_forever()
+class danmuWebsocket:
+    """
+    websocket类，用于构造连接到b站直播间ws服务器的过程以及保持连接同时获取服务器发送的弹幕信息
+    """
+    def __init__(self):
+        self.room = roomInfo('0')
+        self.wss = None
+        self.danmuContent = None
+
+    def __init__(self, roomId: str):
+        """
+        构造函数，使用房间id构造ws连接
+        :param roomId: 房间直接id
+        """
+        self.room = roomInfo(roomId)
+        self.wss = None
+
+    def __init__(self, roomId: str, danmuContent: QListWidget):
+        """
+        构造函数，使用房间id构造ws连接，同时传入弹幕鸡主窗口中弹幕显示Widget
+        :param roomId: 房间直接id
+        :param danmuContent: 主窗口中显示弹幕的QListWidget
+        """
+        self.room = roomInfo(roomId)
+        self.wss = None
+        self.danmuContent = danmuContent
+
+    def getRoomId(self):
+        return self.room.getRoomId()
+
+    def getToken(self):
+        return self.room.get_token()
+
+    def handleMsg(self, message):
+        """
+        处理从弹幕服务器发来的弹幕信息，由on_message()方法调用
+        :param message: 接收到的信息
+        """
+        message = message[16:]
+        try:
+            message = zlib.decompress(message)
+        except Exception as e:
+            pass
+        else:
+            t = convertSourceDanmuToList(message)
+            for l in t:
+                if l['cmd'] == 'SEND_GIFT':
+                    timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['data']['timestamp']))
+                    print(timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num']))
+                    self.danmuContent.addItem(QListWidgetItem(QIcon('img/gift.png'), timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num'])))
+                elif l['cmd'] == 'DANMU_MSG':
+                    timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['info'][9]['ts']))
+                    print(timestr + l['info'][2][1] + ':' + l['info'][1])
+                    self.danmuContent.addItem(QListWidgetItem(QIcon('img/message.png'), timestr + l['info'][2][1] + ':' + l['info'][1]))
+            self.danmuContent.setCurrentRow(self.danmuContent.count() - 1)
+            QApplication.processEvents()
+
+    def on_error(self, error):
+        print(error)
+
+    def on_message(self, message):
+        _thread.start_new_thread(self.handleMsg, (message,))
+
+    def on_open(self):
+        print("opening...")
+        self.wss.send(generateAuthPack(self.room))
+
+    def __del__(self):
+        self.wss.close()
+        self.stopThread(self.heartBeat.ident)
+
+    def stopWss(self):
+        self.wss.close()
+        self.stopThread(self.heartBeat.ident)
+
+    def stopThread(self, tid):
+        """
+        停止一个由Threading创建的线程
+        :param tid: Thread的id，可由thread.ident获得
+        :return: 1: 线程不存在
+        """
+        tid = ctypes.c_long(tid)
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
+        if res == 0:
+            return
+        elif res != 1:
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+            raise SystemError("PyThreadState_SetAsyncExc failed")
 
     def startWss(self):
         self.wss = websocket.WebSocketApp('wss://broadcastlv.chat.bilibili.com/sub',
                                      on_message=self.on_message,
                                      on_error=self.on_error,
                                      on_open=self.on_open)
-        thread1 = runForeverThread(1, self.wss)
-        thread1.start()
-        _thread.start_new_thread(self.heartBeat, ())
-
-
-
-
-
+        self.runThread = runForeverThread(self.wss)
+        self.heartBeat = heartBeatThread(self.wss)
+        self.runThread.start()
+        self.heartBeat.start()

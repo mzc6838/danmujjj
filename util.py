@@ -56,7 +56,7 @@ def convertSourceDanmuToList(message: bytearray) -> list:
 def generateAuthPack(dmj: roomInfo) -> bytes:
     """
     构造首次连接时的认证包
-    :param room_id: 房间号
+    :param dmj 房间信息
     :return: 构造出的认证包
     """
     payload = '{"uid":0,"roomid":' \
