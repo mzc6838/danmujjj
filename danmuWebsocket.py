@@ -9,6 +9,8 @@ import ctypes
 import inspect
 from PyQt5.QtWidgets import (QListWidget, QApplication, QListWidgetItem)
 from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import pyqtSignal, QObject
+import json
 
 class runForeverThread(threading.Thread):
     def __init__(self, wss: websocket.WebSocketApp):
@@ -47,22 +49,30 @@ class heartBeatThread(threading.Thread):
                 print('heart')
                 time.sleep(20)
 
-class danmuWebsocket:
+class danmuWebsocket(QObject):
     """
-    websocket类，用于构造连接到b站直播间ws服务器的过程以及保持连接同时获取服务器发送的弹幕信息
+    websocket类，用于构造连接到b站直播间ws服务器的过程以及保持连接,同时获取服务器发送的弹幕信息
     """
+
+    realtimeRenQi = pyqtSignal(str)
+    realtimeFans = pyqtSignal(str)
+
     def __init__(self):
+        super().__init__()
         self.room = roomInfo('0')
         self.wss = None
         self.danmuContent = None
+        self.isConnected = False
 
     def __init__(self, roomId: str):
         """
         构造函数，使用房间id构造ws连接
         :param roomId: 房间直接id
         """
+        super().__init__()
         self.room = roomInfo(roomId)
         self.wss = None
+        self.isConnected = False
 
     def __init__(self, roomId: str, danmuContent: QListWidget):
         """
@@ -70,9 +80,11 @@ class danmuWebsocket:
         :param roomId: 房间直接id
         :param danmuContent: 主窗口中显示弹幕的QListWidget
         """
+        super().__init__()
         self.room = roomInfo(roomId)
         self.wss = None
         self.danmuContent = danmuContent
+        self.isConnected = False
 
     def getRoomId(self):
         return self.room.getRoomId()
@@ -89,22 +101,40 @@ class danmuWebsocket:
         try:
             message = zlib.decompress(message)
         except Exception as e:
-            pass
+            if message == b'{"code":0}':
+                self.danmuContent.addItem(QListWidgetItem(QIcon('img/notice.png'), '已连接到直播间。'))
+                QApplication.processEvents()
+                self.isConnected = True
+            else:
+                print(message)
+                try:
+                    temp = json.loads(message)
+                except Exception as e:
+                    self.sendRenQiToMainWindow(str(int().from_bytes(message, 'big', signed=False)))
+                else:
+                    if temp['cmd'] == 'ROOM_REAL_TIME_MESSAGE_UPDATE':
+                        self.sendFansToMainWindow(str(temp['data']['fans']))
+
+            # pass
         else:
             t = convertSourceDanmuToList(message)
             for l in t:
                 if l['cmd'] == 'SEND_GIFT':
                     timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['data']['timestamp']))
-                    print(timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num']))
+                    # print(timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num']))
                     self.danmuContent.addItem(QListWidgetItem(QIcon('img/gift.png'), timestr + l['data']['uname'] + ' 赠送 ' + l['data']['giftName'] + ' x' + str(l['data']['num'])))
                 elif l['cmd'] == 'DANMU_MSG':
                     timestr = time.strftime("[%H:%M:%S] ", time.localtime(l['info'][9]['ts']))
-                    print(timestr + l['info'][2][1] + ':' + l['info'][1])
+                    # print(timestr + l['info'][2][1] + ':' + l['info'][1])
                     self.danmuContent.addItem(QListWidgetItem(QIcon('img/message.png'), timestr + l['info'][2][1] + ':' + l['info'][1]))
             self.danmuContent.setCurrentRow(self.danmuContent.count() - 1)
             QApplication.processEvents()
 
     def on_error(self, error):
+        self.isConnected = False
+        self.stopThread(self.heartBeat.ident)
+        self.danmuContent.addItem(QListWidgetItem(QIcon('img/error.png'), '出现错误：' + error))
+        QApplication.processEvents()
         print(error)
 
     def on_message(self, message):
@@ -112,21 +142,29 @@ class danmuWebsocket:
 
     def on_open(self):
         print("opening...")
+        self.danmuContent.addItem(QListWidgetItem(QIcon('img/notice.png'), '正在连接......'))
+        QApplication.processEvents()
         self.wss.send(generateAuthPack(self.room))
 
     def __del__(self):
-        self.wss.close()
-        self.stopThread(self.heartBeat.ident)
+        if self.isConnected == True:
+            self.isConnected == False
+            self.wss.close()
+            self.stopThread(self.heartBeat.ident)
 
     def stopWss(self):
-        self.wss.close()
-        self.stopThread(self.heartBeat.ident)
+        if self.isConnected == True:
+            self.danmuContent.addItem(QListWidgetItem(QIcon('img/notice.png'), '连接已断开。'))
+            QApplication.processEvents()
+            self.isConnected == False
+            self.wss.close()
+            self.stopThread(self.heartBeat.ident)
 
     def stopThread(self, tid):
         """
         停止一个由Threading创建的线程
         :param tid: Thread的id，可由thread.ident获得
-        :return: 1: 线程不存在
+        :return: 0: 线程不存在
         """
         tid = ctypes.c_long(tid)
         res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, ctypes.py_object(SystemExit))
@@ -145,3 +183,13 @@ class danmuWebsocket:
         self.heartBeat = heartBeatThread(self.wss)
         self.runThread.start()
         self.heartBeat.start()
+
+    def getConnectionState(self):
+        return self.isConnected
+
+    def sendRenQiToMainWindow(self, RenQi):
+        self.realtimeRenQi.emit(str(RenQi))
+
+    def sendFansToMainWindow(self, Fans):
+        self.realtimeFans.emit(Fans)
+

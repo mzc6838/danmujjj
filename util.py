@@ -8,7 +8,6 @@ def s2bin(s: str) -> str:
     :return: 转换为二进制的0/1字符串
     """
     tmp = []
-    tmpp = ''
     for c in s:
         tmpp = str(bin(ord(c)).replace('0b', ''))
         while len(tmpp) != 8:
